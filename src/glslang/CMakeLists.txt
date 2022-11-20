@@ -34,7 +34,7 @@ qt_internal_extend_target(BundledGlslang_Spirv CONDITION WIN32
         GLSLANG_OSINCLUDE_WIN32
 )
 
-qt_internal_extend_target(BundledGlslang_Spirv CONDITION UNIX
+qt_internal_extend_target(BundledGlslang_Spirv CONDITION (UNIX OR OS2)
     DEFINES
         GLSLANG_OSINCLUDE_UNIX
 )
@@ -45,7 +45,7 @@ qt_internal_extend_target(BundledGlslang_Spirv CONDITION UNIX
 # special case begin
 if(WIN32)
     set(GLSLANG_OSDEP_PATH ../3rdparty/glslang/glslang/OSDependent/Windows)
-elseif(UNIX)
+elseif(UNIX OR OS2)
     set(GLSLANG_OSDEP_PATH ../3rdparty/glslang/glslang/OSDependent/Unix)
 endif()
 # special case end
