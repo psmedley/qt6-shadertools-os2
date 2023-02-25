@@ -21,6 +21,8 @@
 #     Specify OPTIMIZED to enable optimizing for performance where applicable.
 #         For SPIR-V this involves invoking spirv-opt from SPIRV-Tools / the Vulkan SDK.
 #     Specify QUIET to suppress all debug and warning prints from qsb.
+#     Specify OUTPUT_TARGETS to get the special generated targets when using a static library.
+#         This might be useful to perform additional processing on these targets.
 #
 # The actual file name in the resource system is either :/PREFIX/FILES[i]-BASE+".qsb" or :/PREFIX/OUTPUTS[i]
 #
@@ -48,7 +50,7 @@ function(_qt_internal_add_shaders_impl target resourcename)
     cmake_parse_arguments(
         arg
         "BATCHABLE;PRECOMPILE;PERTARGETCOMPILE;NOGLSL;NOHLSL;NOMSL;DEBUGINFO;OPTIMIZED;SILENT;QUIET;_QT_INTERNAL"
-        "PREFIX;BASE;GLSL;HLSL;MSL"
+        "PREFIX;BASE;GLSL;HLSL;MSL;OUTPUT_TARGETS"
         "FILES;OUTPUTS;DEFINES"
         ${ARGN}
     )
@@ -195,10 +197,34 @@ function(_qt_internal_add_shaders_impl target resourcename)
         math(EXPR file_index "${file_index}+1")
     endforeach()
 
+    if(CMAKE_GENERATOR STREQUAL "Xcode")
+        # Save the target responsible for driving the build of the custom command
+        # into an internal source file property. It will be added as a dependency for targets
+        # created by _qt_internal_process_resource, to avoid the Xcode issue of not allowing
+        # multiple targets depending on the output, without having a common target ancestor.
+        set(common_ancestor_target qsb_${target}_${resourcename})
+
+        if(NOT TARGET ${common_ancestor_target})
+            add_custom_target(${common_ancestor_target} SOURCES "${qsb_files}")
+        else()
+            set_property(TARGET ${common_ancestor_target} APPEND PROPERTY SOURCES ${qsb_files})
+        endif()
+
+        set(scope_args)
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.18")
+            set(scope_args TARGET_DIRECTORY ${target})
+        endif()
+        set_source_files_properties(${qsb_files} ${scope_args} PROPERTIES
+            _qt_resource_target_dependency "${common_ancestor_target}"
+        )
+    endif()
+
     if (arg__QT_INTERNAL)
         qt_internal_add_resource(${target} ${resourcename}
             PREFIX
                 "${arg_PREFIX}"
+            OUTPUT_TARGETS
+                output_targets
             FILES
                 "${qsb_files}"
         )
@@ -206,23 +232,41 @@ function(_qt_internal_add_shaders_impl target resourcename)
         qt6_add_resources(${target} ${resourcename}
             PREFIX
                 "${arg_PREFIX}"
+            OUTPUT_TARGETS
+                output_targets
             FILES
                 "${qsb_files}"
         )
+    endif()
+
+    if(arg_OUTPUT_TARGETS)
+        set(${arg_OUTPUT_TARGETS} "${output_targets}" PARENT_SCOPE)
     endif()
 endfunction()
 
 function(qt6_add_shaders)
     _qt_internal_add_shaders_impl(${ARGV})
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "OUTPUT_TARGETS" "")
+    if (arg_OUTPUT_TARGETS)
+        set(${arg_OUTPUT_TARGETS} ${${arg_OUTPUT_TARGETS}} PARENT_SCOPE)
+    endif()
 endfunction()
 
 if(NOT QT_NO_CREATE_VERSIONLESS_FUNCTIONS)
     function(qt_add_shaders)
         qt6_add_shaders(${ARGV})
+        cmake_parse_arguments(PARSE_ARGV 1 arg "" "OUTPUT_TARGETS" "")
+        if (arg_OUTPUT_TARGETS)
+            set(${arg_OUTPUT_TARGETS} ${${arg_OUTPUT_TARGETS}} PARENT_SCOPE)
+        endif()
     endfunction()
 endif()
 
 # for use by Qt modules that need qt_internal_add_resource
 function(qt_internal_add_shaders)
     _qt_internal_add_shaders_impl(${ARGV} _QT_INTERNAL)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "" "OUTPUT_TARGETS" "")
+    if (arg_OUTPUT_TARGETS)
+        set(${arg_OUTPUT_TARGETS} ${${arg_OUTPUT_TARGETS}} PARENT_SCOPE)
+    endif()
 endfunction()
