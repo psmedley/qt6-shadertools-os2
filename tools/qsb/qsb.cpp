@@ -1,30 +1,5 @@
-/****************************************************************************
-**
-** Copyright (C) 2019 The Qt Company Ltd.
-** Contact: https://www.qt.io/licensing/
-**
-** This file is part of the tools applications of the Qt Toolkit.
-**
-** $QT_BEGIN_LICENSE:GPL-EXCEPT$
-** Commercial License Usage
-** Licensees holding valid commercial Qt licenses may use this file in
-** accordance with the commercial license agreement provided with the
-** Software or, alternatively, in accordance with the terms contained in
-** a written agreement between you and The Qt Company. For licensing terms
-** and conditions see https://www.qt.io/terms-conditions. For further
-** information use the contact form at https://www.qt.io/contact-us.
-**
-** GNU General Public License Usage
-** Alternatively, this file may be used under the terms of the GNU
-** General Public License version 3 as published by the Free Software
-** Foundation with exceptions as appearing in the file LICENSE.GPL3-EXCEPT
-** included in the packaging of this file. Please review the following
-** information to ensure the GNU General Public License requirements will
-** be met: https://www.gnu.org/licenses/gpl-3.0.html.
-**
-** $QT_END_LICENSE$
-**
-****************************************************************************/
+// Copyright (C) 2019 The Qt Company Ltd.
+// SPDX-License-Identifier: LicenseRef-Qt-Commercial OR GPL-3.0-only WITH Qt-GPL-exception-1.0
 
 #include <QtCore/qcoreapplication.h>
 #include <QtCore/qcommandlineparser.h>
@@ -216,25 +191,32 @@ static void dump(const QShader &bs)
     ts << "QSB_VERSION: " << QShaderPrivate::get(&bs)->qsbVersion << "\n";
 #endif
     const QList<QShaderKey> keys = bs.availableShaders();
-    ts << "Has " << keys.count() << " shaders: (unordered list)\n";
-    for (int i = 0; i < keys.count(); ++i) {
+    ts << "Has " << keys.size() << " shaders: (unordered list)\n";
+    for (int i = 0; i < keys.size(); ++i) {
         ts << "  Shader " << i << ": " << sourceStr(keys[i].source())
             << " " << sourceVersionStr(keys[i].sourceVersion())
             << " [" << sourceVariantStr(keys[i].sourceVariant()) << "]\n";
     }
     ts << "\n";
     ts << "Reflection info: " << bs.description().toJson() << "\n\n";
-    for (int i = 0; i < keys.count(); ++i) {
+    for (int i = 0; i < keys.size(); ++i) {
         ts << "Shader " << i << ": " << sourceStr(keys[i].source())
             << " " << sourceVersionStr(keys[i].sourceVersion())
             << " [" << sourceVariantStr(keys[i].sourceVariant()) << "]\n";
         QShaderCode shader = bs.shader(keys[i]);
         if (!shader.entryPoint().isEmpty())
             ts << "Entry point: " << shader.entryPoint() << "\n";
-        if (const QShader::NativeResourceBindingMap *map = bs.nativeResourceBindingMap(keys[i])) {
+        QShader::NativeResourceBindingMap nativeResMap = bs.nativeResourceBindingMap(keys[i]);
+        if (!nativeResMap.isEmpty()) {
             ts << "Native resource binding map:\n";
-            for (auto mapIt = map->cbegin(), mapItEnd = map->cend(); mapIt != mapItEnd; ++mapIt)
+            for (auto mapIt = nativeResMap.cbegin(), mapItEnd = nativeResMap.cend(); mapIt != mapItEnd; ++mapIt)
                 ts << mapIt.key() << " -> [" << mapIt.value().first << ", " << mapIt.value().second << "]\n";
+        }
+        QShader::SeparateToCombinedImageSamplerMappingList samplerMapList = bs.separateToCombinedImageSamplerMappingList(keys[i]);
+        if (!samplerMapList.isEmpty()) {
+            ts << "Mapping table for auto-generated combined image samplers:\n";
+            for (auto listIt = samplerMapList.cbegin(), listItEnd = samplerMapList.cend(); listIt != listItEnd; ++listIt)
+                ts << "\"" << listIt->combinedSamplerName << "\" -> [" << listIt->textureBinding << ", " << listIt->samplerBinding << "]\n";
         }
         ts << "Contents:\n";
         switch (keys[i].source()) {
@@ -255,10 +237,10 @@ static void dump(const QShader &bs)
     }
 }
 
-static QShaderKey shaderKeyFromWhatSpec(const QString &what, bool batchable)
+static QShaderKey shaderKeyFromWhatSpec(const QString &what, QShader::Variant variant)
 {
     const QStringList typeAndVersion = what.split(QLatin1Char(','), Qt::SkipEmptyParts);
-    if (typeAndVersion.count() < 2)
+    if (typeAndVersion.size() < 2)
         return {};
 
     QShader::Source src;
@@ -282,19 +264,18 @@ static QShaderKey shaderKeyFromWhatSpec(const QString &what, bool batchable)
     QShaderVersion::Flags flags;
     QString version = typeAndVersion[1];
     if (version.endsWith(QLatin1String(" es"))) {
-        version = version.left(version.count() - 3);
+        version = version.left(version.size() - 3);
         flags |= QShaderVersion::GlslEs;
     } else if (version.endsWith(QLatin1String("es"))) {
-        version = version.left(version.count() - 2);
+        version = version.left(version.size() - 2);
         flags |= QShaderVersion::GlslEs;
     }
     const int ver = version.toInt();
 
-    const QShader::Variant variant = batchable ? QShader::BatchableVertexShader : QShader::StandardShader;
     return { src, { ver, flags }, variant };
 }
 
-static bool extract(const QShader &bs, const QString &what, bool batchable, const QString &outfn)
+static bool extract(const QShader &bs, const QString &what, QShader::Variant variant, const QString &outfn)
 {
     if (what == QLatin1String("reflect")) {
         const QByteArray reflect = bs.description().toJson();
@@ -305,7 +286,7 @@ static bool extract(const QShader &bs, const QString &what, bool batchable, cons
         return true;
     }
 
-    const QShaderKey key = shaderKeyFromWhatSpec(what, batchable);
+    const QShaderKey key = shaderKeyFromWhatSpec(what, variant);
     const QShaderCode code = bs.shader(key);
     if (code.shader().isEmpty())
         return false;
@@ -322,22 +303,25 @@ static bool extract(const QShader &bs, const QString &what, bool batchable, cons
     return true;
 }
 
-static bool replace(const QShader &shaderPack, const QStringList &whatList, bool batchable, const QString &outfn)
+static bool addOrReplace(const QShader &shaderPack, const QStringList &whatList, QShader::Variant variant, const QString &outfn)
 {
     QShader workShaderPack = shaderPack;
     for (const QString &what : whatList) {
         const QStringList spec = what.split(QLatin1Char(','), Qt::SkipEmptyParts);
-        if (spec.count() < 3) {
+        if (spec.size() < 3) {
             printError("Invalid replace spec '%s'", qPrintable(what));
             return false;
         }
 
-        const QShaderKey key = shaderKeyFromWhatSpec(what, batchable);
+        const QShaderKey key = shaderKeyFromWhatSpec(what, variant);
         const QString fn = spec[2];
 
         const QByteArray buf = readFile(fn, FileType::Binary);
         if (buf.isEmpty())
             return false;
+
+        // Does not matter if 'key' was present before or not, we support both
+        // replacing and adding using the same qsb -r ... syntax.
 
         const QShaderCode code(buf, QByteArrayLiteral("main"));
         workShaderPack.setShader(key, code);
@@ -349,6 +333,25 @@ static bool replace(const QShader &shaderPack, const QStringList &whatList, bool
                    key.sourceVersion().flags().testFlag(QShaderVersion::GlslEs) ? " es" : "",
                    qPrintable(sourceVariantStr(key.sourceVariant())),
                    qPrintable(fn));
+        }
+    }
+    return writeToFile(workShaderPack.serialized(), outfn, FileType::Binary);
+}
+
+static bool remove(const QShader &shaderPack, const QStringList &whatList, QShader::Variant variant, const QString &outfn)
+{
+    QShader workShaderPack = shaderPack;
+    for (const QString &what : whatList) {
+        const QShaderKey key = shaderKeyFromWhatSpec(what, variant);
+        if (!workShaderPack.availableShaders().contains(key))
+            continue;
+        workShaderPack.removeShader(key);
+        if (!silent) {
+            qDebug("Removed %s %d%s (variant %s).",
+                   qPrintable(sourceStr(key.source())),
+                   key.sourceVersion().version(),
+                   key.sourceVersion().flags().testFlag(QShaderVersion::GlslEs) ? " es" : "",
+                   qPrintable(sourceVariantStr(key.sourceVariant())));
         }
     }
     return writeToFile(workShaderPack.serialized(), outfn, FileType::Binary);
@@ -401,13 +404,10 @@ static void replaceShaderContents(QShader *shaderPack,
     QShaderCode shader(contents, entryPoint);
     shaderPack->setShader(newKey, shader);
     if (newKey != originalKey) {
-        if (const QShader::NativeResourceBindingMap *map = shaderPack->nativeResourceBindingMap(originalKey)) {
-            // Cannot just throw *map in setResourceBinding() because that will insert into
-            // the table map is referencing into... Make a temporary to be safe.
-            auto mapDeref = *map;
-            shaderPack->setResourceBindingMap(newKey, mapDeref);
-            shaderPack->removeResourceBindingMap(originalKey);
-        }
+        shaderPack->setResourceBindingMap(newKey, shaderPack->nativeResourceBindingMap(originalKey));
+        shaderPack->removeResourceBindingMap(originalKey);
+        shaderPack->setSeparateToCombinedImageSamplerMappingList(newKey, shaderPack->separateToCombinedImageSamplerMappingList(originalKey));
+        shaderPack->removeSeparateToCombinedImageSamplerMappingList(originalKey);
         shaderPack->removeShader(originalKey);
     }
 }
@@ -422,7 +422,11 @@ int main(int argc, char **argv)
     app.setApplicationVersion(QLatin1String(QT_VERSION_STR));
     cmdLineParser.addHelpOption();
     cmdLineParser.addVersionOption();
-    cmdLineParser.addPositionalArgument(QLatin1String("file"), QObject::tr("Vulkan GLSL source file to compile"), QObject::tr("file"));
+    cmdLineParser.addPositionalArgument(QLatin1String("file"),
+                                        QObject::tr("Vulkan GLSL source file to compile. The file extension determines the shader stage, and can be one of "
+                                                    ".vert, .frag, .comp"
+                                                    ),
+                                        QObject::tr("file"));
     QCommandLineOption batchableOption({ "b", "batchable" }, QObject::tr("Also generates rewritten vertex shader for Qt Quick scene graph batching."));
     cmdLineParser.addOption(batchableOption);
     QCommandLineOption batchLocOption("zorder-loc",
@@ -471,9 +475,16 @@ int main(int argc, char **argv)
                                      QObject::tr("Switches to replace mode. Replaces the specified shader in the shader pack with the contents of a file. "
                                                  "This argument can be specified multiple times. "
                                                  "Pass -b to choose the batchable variant. "
+                                                 "Also supports adding a shader for a target/variant that was not present before. "
                                                  "<what>=<target>,<filename> where <target>=spirv,<version>|glsl,<version>|..."),
                                      QObject::tr("what"));
     cmdLineParser.addOption(replaceOption);
+    QCommandLineOption eraseOption({ "e", "erase" },
+                                     QObject::tr("Switches to erase mode. Removes the specified shader from the shader pack. "
+                                                 "Pass -b to choose the batchable variant. "
+                                                 "<what>=spirv,<version>|glsl,<version>|..."),
+                                     QObject::tr("what"));
+    cmdLineParser.addOption(eraseOption);
     QCommandLineOption silentOption({ "s", "silent" }, QObject::tr("Enables silent mode. Only fatal errors will be printed."));
     cmdLineParser.addOption(silentOption);
 
@@ -488,29 +499,35 @@ int main(int argc, char **argv)
 
     QShaderBaker baker;
     for (const QString &fn : cmdLineParser.positionalArguments()) {
-        if (cmdLineParser.isSet(dumpOption) || cmdLineParser.isSet(extractOption) || cmdLineParser.isSet(replaceOption)) {
+        if (cmdLineParser.isSet(dumpOption)
+                || cmdLineParser.isSet(extractOption)
+                || cmdLineParser.isSet(replaceOption)
+                || cmdLineParser.isSet(eraseOption))
+        {
             QByteArray buf = readFile(fn, FileType::Binary);
             if (!buf.isEmpty()) {
                 QShader bs = QShader::fromSerialized(buf);
                 if (bs.isValid()) {
+                    const bool batchable = cmdLineParser.isSet(batchableOption);
+                    const QShader::Variant variant = batchable ? QShader::BatchableVertexShader : QShader::StandardShader;
                     if (cmdLineParser.isSet(dumpOption)) {
                         dump(bs);
                     } else if (cmdLineParser.isSet(extractOption)) {
                         if (cmdLineParser.isSet(outputOption)) {
-                            if (!extract(bs, cmdLineParser.value(extractOption), cmdLineParser.isSet(batchableOption),
-                                         cmdLineParser.value(outputOption)))
-                            {
+                            if (!extract(bs, cmdLineParser.value(extractOption), variant, cmdLineParser.value(outputOption)))
                                 return 1;
-                            }
                         } else {
                             printError("No output file specified");
                         }
                     } else if (cmdLineParser.isSet(replaceOption)) {
-                        if (!replace(bs, cmdLineParser.values(replaceOption), cmdLineParser.isSet(batchableOption), fn))
+                        if (!addOrReplace(bs, cmdLineParser.values(replaceOption), variant, fn))
+                            return 1;
+                    } else if (cmdLineParser.isSet(eraseOption)) {
+                        if (!remove(bs, cmdLineParser.values(eraseOption), variant, fn))
                             return 1;
                     }
                 } else {
-                    printError("Failed to deserialize %s", qPrintable(fn));
+                    printError("Failed to deserialize %s (or the shader pack is empty)", qPrintable(fn));
                 }
             }
             continue;
@@ -549,10 +566,10 @@ int main(int argc, char **argv)
             for (QString version : versions) {
                 QShaderVersion::Flags flags;
                 if (version.endsWith(QLatin1String(" es"))) {
-                    version = version.left(version.count() - 3);
+                    version = version.left(version.size() - 3);
                     flags |= QShaderVersion::GlslEs;
                 } else if (version.endsWith(QLatin1String("es"))) {
-                    version = version.left(version.count() - 2);
+                    version = version.left(version.size() - 2);
                     flags |= QShaderVersion::GlslEs;
                 }
                 bool ok = false;
