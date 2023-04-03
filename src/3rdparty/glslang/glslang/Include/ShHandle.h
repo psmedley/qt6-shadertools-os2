@@ -154,7 +154,6 @@ protected:
     ShBindingTable* uniformBindings;                // created by the linker
 };
 
-
 //
 // This is the interface between the machine independent code
 // and the machine dependent code.

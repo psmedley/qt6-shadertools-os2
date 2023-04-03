@@ -91,4 +91,5 @@ void SpirvToolsStripDebugInfo(const glslang::TIntermediate& intermediate,
 
 } // end namespace glslang
 } // namespace QtShaderTools
+
 #endif // GLSLANG_SPV_TOOLS_H

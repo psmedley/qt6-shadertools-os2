@@ -112,4 +112,4 @@ void TInfoSinkBase::append(const TString& t)
 }
 
 } // end namespace glslang
-} // QtShaderTools
+} // namespace QtShaderTools

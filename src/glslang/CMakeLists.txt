@@ -1,3 +1,6 @@
+# Copyright (C) 2022 The Qt Company Ltd.
+# SPDX-License-Identifier: BSD-3-Clause
+
 # Generated from glslang.pro.
 
 #####################################################################
@@ -138,6 +141,7 @@ qt_internal_add_3rdparty_library(BundledGlslang_Glslang
         ../3rdparty/glslang/glslang/MachineIndependent/RemoveTree.cpp
         ../3rdparty/glslang/glslang/MachineIndependent/Scan.cpp
         ../3rdparty/glslang/glslang/MachineIndependent/ShaderLang.cpp
+        ../3rdparty/glslang/glslang/MachineIndependent/SpirvIntrinsics.cpp
         ../3rdparty/glslang/glslang/MachineIndependent/SymbolTable.cpp
         ../3rdparty/glslang/glslang/MachineIndependent/Versions.cpp
         ../3rdparty/glslang/glslang/MachineIndependent/attribute.cpp
@@ -162,6 +166,8 @@ qt_internal_add_3rdparty_library(BundledGlslang_Glslang
 )
 qt_disable_warnings(BundledGlslang_Glslang)
 qt_set_symbol_visibility_hidden(BundledGlslang_Glslang)
+
+set_target_properties(BundledGlslang_Glslang PROPERTIES UNITY_BUILD OFF)
 
 ## Scopes:
 #####################################################################

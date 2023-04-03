@@ -44,11 +44,11 @@
 #include <list>
 #include <set>
 
-namespace QtShaderTools {
 //
 // A reflection database and its interface, consistent with the OpenGL API reflection queries.
 //
 
+namespace QtShaderTools {
 namespace glslang {
 
 class TIntermediate;

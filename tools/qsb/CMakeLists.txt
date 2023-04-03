@@ -1,3 +1,6 @@
+# Copyright (C) 2022 The Qt Company Ltd.
+# SPDX-License-Identifier: BSD-3-Clause
+
 # Generated from qsb.pro.
 
 #####################################################################
@@ -10,7 +13,7 @@ qt_internal_add_tool(${target_name}
         ShaderTools # special case
     SOURCES
         qsb.cpp
-    PUBLIC_LIBRARIES
+    LIBRARIES
         Qt::Gui
         Qt::GuiPrivate
         Qt::ShaderToolsPrivate

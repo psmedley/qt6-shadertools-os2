@@ -8,6 +8,7 @@
 #include <QtCore/qdir.h>
 #include <QtCore/qtemporarydir.h>
 #include <QtCore/qdebug.h>
+#include <QtCore/qlibraryinfo.h>
 #include <QtShaderTools/private/qshaderbaker_p.h>
 #include <QtGui/private/qshader_p_p.h>
 
@@ -157,6 +158,8 @@ static QString sourceStr(QShader::Source source)
         return QStringLiteral("DXIL");
     case QShader::MetalLibShader:
         return QStringLiteral("metallib");
+    case QShader::WgslShader:
+        return QStringLiteral("WGSL");
     default:
         Q_UNREACHABLE();
     }
@@ -178,6 +181,12 @@ static QString sourceVariantStr(const QShader::Variant &v)
         return QLatin1String("Standard");
     case QShader::BatchableVertexShader:
         return QLatin1String("Batchable");
+    case QShader::UInt32IndexedVertexAsComputeShader:
+        return QLatin1String("UInt32IndexedVertexAsCompute");
+    case QShader::UInt16IndexedVertexAsComputeShader:
+        return QLatin1String("UInt16IndexedVertexAsCompute");
+    case QShader::NonIndexedVertexAsComputeShader:
+        return QLatin1String("NonIndexedVertexAsCompute");
     default:
         Q_UNREACHABLE();
     }
@@ -187,11 +196,9 @@ static void dump(const QShader &bs)
 {
     QTextStream ts(stdout);
     ts << "Stage: " << stageStr(bs.stage()) << "\n";
-#if (QT_VERSION >= QT_VERSION_CHECK(5, 15, 0))
     ts << "QSB_VERSION: " << QShaderPrivate::get(&bs)->qsbVersion << "\n";
-#endif
     const QList<QShaderKey> keys = bs.availableShaders();
-    ts << "Has " << keys.size() << " shaders: (unordered list)\n";
+    ts << "Has " << keys.size() << " shaders:\n";
     for (int i = 0; i < keys.size(); ++i) {
         ts << "  Shader " << i << ": " << sourceStr(keys[i].source())
             << " " << sourceVersionStr(keys[i].sourceVersion())
@@ -218,14 +225,43 @@ static void dump(const QShader &bs)
             for (auto listIt = samplerMapList.cbegin(), listItEnd = samplerMapList.cend(); listIt != listItEnd; ++listIt)
                 ts << "\"" << listIt->combinedSamplerName << "\" -> [" << listIt->textureBinding << ", " << listIt->samplerBinding << "]\n";
         }
+        QShader::NativeShaderInfo shaderInfo = bs.nativeShaderInfo(keys[i]);
+        if (shaderInfo.flags)
+            ts << "Native shader info flags: " << shaderInfo.flags << "\n";
+        if (!shaderInfo.extraBufferBindings.isEmpty()) {
+            ts << "Native shader extra buffer bindings:\n";
+            for (auto mapIt = shaderInfo.extraBufferBindings.cbegin(), mapItEnd = shaderInfo.extraBufferBindings.cend();
+                 mapIt != mapItEnd; ++mapIt)
+            {
+                static struct {
+                    QShaderPrivate::MslNativeShaderInfoExtraBufferBindings key;
+                    const char *str;
+                } ebbNames[] = {
+                    { QShaderPrivate::MslTessVertIndicesBufferBinding, "tessellation(vert)-index-buffer-binding" },
+                    { QShaderPrivate::MslTessVertTescOutputBufferBinding, "tessellation(vert/tesc)-output-buffer-binding" },
+                    { QShaderPrivate::MslTessTescTessLevelBufferBinding, "tessellation(tesc)-level-buffer-binding" },
+                    { QShaderPrivate::MslTessTescPatchOutputBufferBinding, "tessellation(tesc)-patch-output-buffer-binding" },
+                    { QShaderPrivate::MslTessTescParamsBufferBinding, "tessellation(tesc)-params-buffer-binding" },
+                    { QShaderPrivate::MslTessTescInputBufferBinding, "tessellation(tesc)-input-buffer-binding" }
+                };
+                bool known = false;
+                for (size_t i = 0; i < sizeof(ebbNames) / sizeof(ebbNames[0]); ++i) {
+                    if (ebbNames[i].key == mapIt.key()) {
+                        ts << "[" << ebbNames[i].str << "] = " << mapIt.value() << "\n";
+                        known = true;
+                        break;
+                    }
+                }
+                if (!known)
+                    ts << "[" << mapIt.key() << "] = " << mapIt.value() << "\n";
+            }
+        }
+
         ts << "Contents:\n";
         switch (keys[i].source()) {
         case QShader::SpirvShader:
-            Q_FALLTHROUGH();
         case QShader::DxbcShader:
-            Q_FALLTHROUGH();
         case QShader::DxilShader:
-            Q_FALLTHROUGH();
         case QShader::MetalLibShader:
             ts << "Binary of " << shader.shader().size() << " bytes\n\n";
             break;
@@ -258,6 +294,8 @@ static QShaderKey shaderKeyFromWhatSpec(const QString &what, QShader::Variant va
         src = QShader::DxilShader;
     else if (typeAndVersion[0] == QLatin1String("metallib"))
         src = QShader::MetalLibShader;
+    else if (typeAndVersion[0] == QLatin1String("wgsl"))
+        src = QShader::WgslShader;
     else
         return {};
 
@@ -303,7 +341,11 @@ static bool extract(const QShader &bs, const QString &what, QShader::Variant var
     return true;
 }
 
-static bool addOrReplace(const QShader &shaderPack, const QStringList &whatList, QShader::Variant variant, const QString &outfn)
+static bool addOrReplace(const QShader &shaderPack,
+                         const QStringList &whatList,
+                         QShader::Variant variant,
+                         const QString &outfn,
+                         QShader::SerializedFormatVersion qsbVersion)
 {
     QShader workShaderPack = shaderPack;
     for (const QString &what : whatList) {
@@ -335,10 +377,14 @@ static bool addOrReplace(const QShader &shaderPack, const QStringList &whatList,
                    qPrintable(fn));
         }
     }
-    return writeToFile(workShaderPack.serialized(), outfn, FileType::Binary);
+    return writeToFile(workShaderPack.serialized(qsbVersion), outfn, FileType::Binary);
 }
 
-static bool remove(const QShader &shaderPack, const QStringList &whatList, QShader::Variant variant, const QString &outfn)
+static bool remove(const QShader &shaderPack,
+                   const QStringList &whatList,
+                   QShader::Variant variant,
+                   const QString &outfn,
+                   QShader::SerializedFormatVersion qsbVersion)
 {
     QShader workShaderPack = shaderPack;
     for (const QString &what : whatList) {
@@ -354,7 +400,7 @@ static bool remove(const QShader &shaderPack, const QStringList &whatList, QShad
                    qPrintable(sourceVariantStr(key.sourceVariant())));
         }
     }
-    return writeToFile(workShaderPack.serialized(), outfn, FileType::Binary);
+    return writeToFile(workShaderPack.serialized(qsbVersion), outfn, FileType::Binary);
 }
 
 static QByteArray fxcProfile(const QShader &bs, const QShaderKey &k)
@@ -424,7 +470,9 @@ int main(int argc, char **argv)
     cmdLineParser.addVersionOption();
     cmdLineParser.addPositionalArgument(QLatin1String("file"),
                                         QObject::tr("Vulkan GLSL source file to compile. The file extension determines the shader stage, and can be one of "
-                                                    ".vert, .frag, .comp"
+                                                    ".vert, .tesc, .tese, .frag, .comp. "
+                                                    "Note: Tessellation control/evaluation is not supported with HLSL, instead use -r to inject handcrafted hull/domain shaders. "
+                                                    "Some targets may need special arguments to be set, e.g. MSL tessellation will likely need --msltess, --tess-vertex-count, --tess-mode, depending on the stage."
                                                     ),
                                         QObject::tr("file"));
     QCommandLineOption batchableOption({ "b", "batchable" }, QObject::tr("Also generates rewritten vertex shader for Qt Quick scene graph batching."));
@@ -445,19 +493,43 @@ int main(int argc, char **argv)
                                  QObject::tr("Comma separated list of Metal Shading Language versions to generate. F.ex. 12 is 1.2, 20 is 2.0."),
                                  QObject::tr("versions"));
     cmdLineParser.addOption(mslOption);
+    QCommandLineOption tessOption("msltess", QObject::tr("Indicates that a vertex shader is going to be used in a pipeline with tessellation. "
+                                                         "Mandatory for vertex shaders planned to be used with tessellation when targeting Metal (--msl)."));
+    cmdLineParser.addOption(tessOption);
+    QCommandLineOption tessVertCountOption("tess-vertex-count", QObject::tr("The output vertex count from the tessellation control stage. "
+                                                                            "Mandatory for tessellation evaluation shaders planned to be used with Metal. "
+                                                                            "The default value is 3. "
+                                                                            "If it does not match the tess.control stage, the generated MSL code will not function as expected."),
+                                           QObject::tr("count"));
+    cmdLineParser.addOption(tessVertCountOption);
+    QCommandLineOption tessModeOption("tess-mode", QObject::tr("The tessellation mode: triangles or quads. Mandatory for tessellation control shaders planned to be used with Metal. "
+                                                               "The default value is triangles. Isolines are not supported with Metal. "
+                                                               "If it does not match the tess.evaluation stage, the generated MSL code will not function as expected."),
+                                      QObject::tr("mode"));
+    cmdLineParser.addOption(tessModeOption);
     QCommandLineOption debugInfoOption("g", QObject::tr("Generate full debug info for SPIR-V and DXBC"));
     cmdLineParser.addOption(debugInfoOption);
-    QCommandLineOption spirvOptOption("O", QObject::tr("Invoke spirv-opt to optimize SPIR-V for performance"));
+    QCommandLineOption spirvOptOption("O", QObject::tr("Invoke spirv-opt (external tool) to optimize SPIR-V for performance."));
     cmdLineParser.addOption(spirvOptOption);
     QCommandLineOption outputOption({ "o", "output" },
                                      QObject::tr("Output file for the shader pack."),
                                      QObject::tr("filename"));
     cmdLineParser.addOption(outputOption);
+    QCommandLineOption qsbVersionOption("qsbversion",
+                                     QObject::tr("QSB version to use for the output file. By default the latest version is automatically used, "
+                                                 "use only to bake compatibility versions. F.ex. 64 is Qt 6.4."),
+                                     QObject::tr("version"));
+    cmdLineParser.addOption(qsbVersionOption);
     QCommandLineOption fxcOption({ "c", "fxc" }, QObject::tr("In combination with --hlsl invokes fxc to store DXBC instead of HLSL."));
     cmdLineParser.addOption(fxcOption);
     QCommandLineOption mtllibOption({ "t", "metallib" },
-                                    QObject::tr("In combination with --msl builds a Metal library with xcrun metal(lib) and stores that instead of the source."));
+                                    QObject::tr("In combination with --msl builds a Metal library with xcrun metal(lib) and stores that instead of the source. "
+                                                "Suitable only when targeting macOS, not iOS."));
     cmdLineParser.addOption(mtllibOption);
+    QCommandLineOption mtllibIosOption({ "T", "metallib-ios" },
+                                       QObject::tr("In combination with --msl builds a Metal library with xcrun metal(lib) and stores that instead of the source. "
+                                                   "Suitable only when targeting iOS, not macOS."));
+    cmdLineParser.addOption(mtllibIosOption);
     QCommandLineOption defineOption({ "D", "define" }, QObject::tr("Define macro. This argument can be specified multiple times."), QObject::tr("name[=value]"));
     cmdLineParser.addOption(defineOption);
     QCommandLineOption perTargetCompileOption({ "p", "per-target" }, QObject::tr("Enable per-target compilation. (instead of source->SPIRV->targets, do "
@@ -499,6 +571,19 @@ int main(int argc, char **argv)
 
     QShaderBaker baker;
     for (const QString &fn : cmdLineParser.positionalArguments()) {
+        auto qsbVersion = QShader::SerializedFormatVersion::Latest;
+        if (cmdLineParser.isSet(qsbVersionOption)) {
+            const QString qsbVersionString = cmdLineParser.value(qsbVersionOption);
+            if (qsbVersionString == QStringLiteral("64")) {
+                qsbVersion = QShader::SerializedFormatVersion::Qt_6_4;
+            } else if (qsbVersionString == QStringLiteral("65")) {
+                qsbVersion = QShader::SerializedFormatVersion::Qt_6_5;
+            } else if (qsbVersionString.toLower() != QStringLiteral("latest")) {
+                printError("Unknown Qt qsb version: %s", qPrintable(qsbVersionString));
+                printError("Available versions: 64, 65, latest");
+                return 1;
+            }
+        }
         if (cmdLineParser.isSet(dumpOption)
                 || cmdLineParser.isSet(extractOption)
                 || cmdLineParser.isSet(replaceOption)
@@ -520,10 +605,10 @@ int main(int argc, char **argv)
                             printError("No output file specified");
                         }
                     } else if (cmdLineParser.isSet(replaceOption)) {
-                        if (!addOrReplace(bs, cmdLineParser.values(replaceOption), variant, fn))
+                        if (!addOrReplace(bs, cmdLineParser.values(replaceOption), variant, fn, qsbVersion))
                             return 1;
                     } else if (cmdLineParser.isSet(eraseOption)) {
-                        if (!remove(bs, cmdLineParser.values(eraseOption), variant, fn))
+                        if (!remove(bs, cmdLineParser.values(eraseOption), variant, fn, qsbVersion))
                             return 1;
                     }
                 } else {
@@ -554,6 +639,24 @@ int main(int argc, char **argv)
             if (cmdLineParser.isSet(batchLocOption))
                 baker.setBatchableVertexShaderExtraInputLocation(cmdLineParser.value(batchLocOption).toInt());
         }
+        if (cmdLineParser.isSet(tessOption)) {
+            variants << QShader::UInt16IndexedVertexAsComputeShader
+                     << QShader::UInt32IndexedVertexAsComputeShader
+                     << QShader::NonIndexedVertexAsComputeShader;
+        }
+
+        if (cmdLineParser.isSet(tessModeOption)) {
+            const QString tessModeStr = cmdLineParser.value(tessModeOption).toLower();
+            if (tessModeStr == QLatin1String("triangles"))
+                baker.setTessellationMode(QShaderDescription::TrianglesTessellationMode);
+            else if (tessModeStr == QLatin1String("quads"))
+                baker.setTessellationMode(QShaderDescription::QuadTessellationMode);
+            else
+                qWarning("Unknown tessellation mode '%s'", qPrintable(tessModeStr));
+        }
+
+        if (cmdLineParser.isSet(tessVertCountOption))
+            baker.setTessellationOutputVertexCount(cmdLineParser.value(tessVertCountOption).toInt());
 
         baker.setGeneratedShaderVariants(variants);
 
@@ -724,7 +827,8 @@ int main(int argc, char **argv)
         // post processing: run xcrun metal and metallib when requested for
         // each entry with type MslShader and add a new entry with type
         // MetalLibShader and remove the original MslShader entry
-        if (cmdLineParser.isSet(mtllibOption)) {
+        if (cmdLineParser.isSet(mtllibOption) || cmdLineParser.isSet(mtllibIosOption)) {
+            const bool isIos = cmdLineParser.isSet(mtllibIosOption);
             QTemporaryDir tempDir;
             if (!tempDir.isValid()) {
                 printError("Failed to create temporary directory");
@@ -742,16 +846,25 @@ int main(int argc, char **argv)
                     if (tmpIn.isEmpty())
                         break;
 
-                    if (!silent) {
-                        qDebug("About to invoke xcrun with metal and metallib.\n"
-                               "  qsb is set up for XCode 10. For earlier versions the -c argument may need to be removed.\n"
-                               "  If getting unable to find utility \"metal\", do xcode-select --switch /Applications/Xcode.app/Contents/Developer");
-                    }
                     const QString binary = QLatin1String("xcrun");
-                    const QStringList baseArguments{QLatin1String("-sdk"), QLatin1String("macosx")};
+                    const QStringList baseArguments = {
+                        QLatin1String("-sdk"),
+                        isIos ? QLatin1String("iphoneos") : QLatin1String("macosx")
+                    };
                     QStringList arguments = baseArguments;
-                    arguments.append({QLatin1String("metal"), QLatin1String("-c"), QDir::toNativeSeparators(tmpIn),
-                                      QLatin1String("-o"), QDir::toNativeSeparators(tmpInterm)});
+                    const QString langVerFmt = QLatin1String("-std=%1-metal%2.%3");
+                    const QString langPlatform = isIos ? QLatin1String("ios") : QLatin1String("macos");
+                    const int langMajor = k.sourceVersion().version() / 10;
+                    const int langMinor = k.sourceVersion().version() % 10;
+                    const QString langVer = langVerFmt.arg(langPlatform).arg(langMajor).arg(langMinor);
+                    arguments.append({
+                            QLatin1String("metal"),
+                            QLatin1String("-c"),
+                            langVer,
+                            QDir::toNativeSeparators(tmpIn),
+                            QLatin1String("-o"),
+                            QDir::toNativeSeparators(tmpInterm)
+                        });
                     QByteArray output;
                     QByteArray errorOutput;
                     bool success = runProcess(binary, arguments, &output, &errorOutput);
@@ -785,7 +898,7 @@ int main(int argc, char **argv)
         }
 
         if (cmdLineParser.isSet(outputOption))
-            writeToFile(bs.serialized(), cmdLineParser.value(outputOption), FileType::Binary);
+            writeToFile(bs.serialized(qsbVersion), cmdLineParser.value(outputOption), FileType::Binary);
     }
 
     return 0;

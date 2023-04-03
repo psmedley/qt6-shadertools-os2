@@ -75,5 +75,4 @@ bool TGenericCompiler::compile(TIntermNode* /*root*/, int /*version*/, EProfile 
 
     return haveValidObjectCode;
 }
-
 } // namespace QtShaderTools

@@ -123,6 +123,8 @@ struct QShaderBakerPrivate
     QByteArray preamble;
     int batchLoc = 7;
     bool perTargetEnabled = false;
+    bool breakOnShaderTranslationError = true;
+    QSpirvShader::TessellationInfo tessInfo;
     QShaderBaker::SpirvOptions spirvOptions;
     QSpirvCompiler compiler;
     QString errorMessage;
@@ -380,6 +382,53 @@ void QShaderBaker::setPerTargetCompilation(bool enable)
     d->perTargetEnabled = enable;
 }
 
+/*!
+    Controls the behavior when shader translation (from SPIR-V to
+    GLSL/HLSL/MSL) fails. By default this setting is true, which will cause
+    bake() to return with an error if a requested shader cannot be generated.
+    If that is not desired, and the intention is to generate what we can but
+    silently skip the rest, then set \a enable to false.
+
+    Targeting multiple GLSL versions can lead to errors when a feature is not
+    translatable to a given version. For example, attempting to translate a
+    shader using textureSize() to GLSL ES 100 would fail the entire bake() call
+    with the error message "textureSize is not supported in ESSL 100". If it is
+    acceptable to not have a GLSL ES 100 shader in the result, even though it
+    was requested, then setting this flag to false makes bake() to succeed.
+ */
+void QShaderBaker::setBreakOnShaderTranslationError(bool enable)
+{
+    d->breakOnShaderTranslationError = enable;
+}
+
+/*!
+    When generating MSL shader code for a tessellation control shader, the
+    tessellation mode (triangles or quads) must be known upfront. In GLSL this
+    is declared in the tessellation evaluation shader typically, but for Metal
+    it must be known also when generating the compute shader from the
+    tessellation control shader.
+
+    When not set, the default is triangles.
+ */
+void QShaderBaker::setTessellationMode(QShaderDescription::TessellationMode mode)
+{
+    d->tessInfo.infoForTesc.mode = mode;
+}
+
+/*!
+    When generating MSL shader code for a tessellation evaluation shader, the
+    output vertex count of the tessellation control shader must be known
+    upfront. in GLSL this would be declared in the tessellation control shader
+    typically, but for Metal it must be known also when generating the vertex
+    shader from the teselation evaluation shader.
+
+    When not set, the default value is 3.
+ */
+void QShaderBaker::setTessellationOutputVertexCount(int count)
+{
+    d->tessInfo.infoForTese.vertexCount = count;
+}
+
 void QShaderBaker::setSpirvOptions(SpirvOptions options)
 {
     d->spirvOptions = options;
@@ -514,28 +563,44 @@ QShader QShaderBaker::bake()
     // hardcoded rule to pick one), but cannot differ for targets (in
     // per-target mode, hence we can just pick the first SPIR-V binary and
     // generate the reflection data based on that)
-    spirvShader.setSpirvBinary(spirv.constKeyValueBegin()->second);
+    spirvShader.setSpirvBinary(spirv.constKeyValueBegin()->second, d->stage);
     if (batchableSpirv.isEmpty()) {
         bs.setDescription(spirvShader.shaderDescription());
     } else {
-        batchableSpirvShader.setSpirvBinary(batchableSpirv.constKeyValueBegin()->second);
+        batchableSpirvShader.setSpirvBinary(batchableSpirv.constKeyValueBegin()->second, d->stage);
         // prefer the batchable's reflection info with _qt_order and such present
         bs.setDescription(batchableSpirvShader.shaderDescription());
     }
 
     for (const GeneratedShader &req: d->reqVersions) {
         for (const QShader::Variant &v : d->variants) {
-            if (v == QShader::BatchableVertexShader && d->stage != QShader::VertexStage)
-                continue;
+            if (d->stage != QShader::VertexStage) {
+                if (v == QShader::BatchableVertexShader
+                        || v == QShader::UInt32IndexedVertexAsComputeShader
+                        || v == QShader::UInt16IndexedVertexAsComputeShader
+                        || v == QShader::NonIndexedVertexAsComputeShader)
+                {
+                    continue;
+                }
+            }
+            if (req.first != QShader::MslShader && req.first != QShader::MetalLibShader) {
+                if (v == QShader::UInt32IndexedVertexAsComputeShader
+                        || v == QShader::UInt16IndexedVertexAsComputeShader
+                        || v == QShader::NonIndexedVertexAsComputeShader)
+                {
+                    continue;
+                }
+            }
+
             QSpirvShader *currentSpirvShader = nullptr;
             if (d->perTargetEnabled) {
                 // This is expensive too, in addition to the multiple
                 // compilation rounds, but opting in to per-target mode is a
                 // careful, conscious choice (hopefully), so it's fine.
                 if (v == QShader::BatchableVertexShader)
-                    batchableSpirvShader.setSpirvBinary(batchableSpirv[req]);
+                    batchableSpirvShader.setSpirvBinary(batchableSpirv[req], d->stage);
                 else
-                    spirvShader.setSpirvBinary(spirv[req]);
+                    spirvShader.setSpirvBinary(spirv[req], d->stage);
             }
             if (v == QShader::BatchableVertexShader)
                 currentSpirvShader = &batchableSpirvShader;
@@ -550,7 +615,7 @@ QShader QShaderBaker::bake()
             case QShader::SpirvShader:
                 if (d->spirvOptions.testFlag(QShaderBaker::SpirvOption::StripDebugAndVarInfo)) {
                     QString errorMsg;
-                    const QByteArray strippedSpirv = currentSpirvShader->remappedSpirvBinary(QSpirvShader::StripOnly, &errorMsg);
+                    const QByteArray strippedSpirv = currentSpirvShader->remappedSpirvBinary(QSpirvShader::RemapFlag::StripOnly, &errorMsg);
                     if (strippedSpirv.isEmpty()) {
                         d->errorMessage = errorMsg;
                         return QShader();
@@ -564,12 +629,17 @@ QShader QShaderBaker::bake()
             {
                 QSpirvShader::GlslFlags flags;
                 if (req.second.flags().testFlag(QShaderVersion::GlslEs))
-                    flags |= QSpirvShader::GlslEs;
+                    flags |= QSpirvShader::GlslFlag::GlslEs;
                 QVector<QSpirvShader::SeparateToCombinedImageSamplerMapping> separateToCombinedImageSamplerMappings;
                 shader.setShader(currentSpirvShader->translateToGLSL(req.second.version(), flags, &separateToCombinedImageSamplerMappings));
                 if (shader.shader().isEmpty()) {
-                    d->errorMessage = currentSpirvShader->translationErrorMessage();
-                    return QShader();
+                    if (d->breakOnShaderTranslationError) {
+                        d->errorMessage = currentSpirvShader->translationErrorMessage();
+                        return QShader();
+                    } else {
+                        d->errorMessage += QLatin1String(" ") + currentSpirvShader->translationErrorMessage();
+                        continue;
+                    }
                 }
                 if (!separateToCombinedImageSamplerMappings.isEmpty()) {
                     const QShaderDescription desc = bs.description();
@@ -602,8 +672,13 @@ QShader QShaderBaker::bake()
                 QShader::NativeResourceBindingMap nativeBindings;
                 shader.setShader(currentSpirvShader->translateToHLSL(req.second.version(), &nativeBindings));
                 if (shader.shader().isEmpty()) {
-                    d->errorMessage = currentSpirvShader->translationErrorMessage();
-                    return QShader();
+                    if (d->breakOnShaderTranslationError) {
+                        d->errorMessage = currentSpirvShader->translationErrorMessage();
+                        return QShader();
+                    } else {
+                        d->errorMessage += QLatin1String(" ") + currentSpirvShader->translationErrorMessage();
+                        continue;
+                    }
                 }
                 bs.setResourceBindingMap(key, nativeBindings);
             }
@@ -611,13 +686,38 @@ QShader QShaderBaker::bake()
             case QShader::MslShader:
             {
                 QShader::NativeResourceBindingMap nativeBindings;
-                shader.setShader(currentSpirvShader->translateToMSL(req.second.version(), &nativeBindings));
+                QShader::NativeShaderInfo shaderInfo;
+                QSpirvShader::MslFlags flags;
+                if (d->stage == QShader::VertexStage) {
+                    switch (v) {
+                    case QShader::UInt16IndexedVertexAsComputeShader:
+                        flags |= QSpirvShader::MslFlag::VertexAsCompute;
+                        flags |= QSpirvShader::MslFlag::WithUInt16Index;
+                        break;
+                    case QShader::UInt32IndexedVertexAsComputeShader:
+                        flags |= QSpirvShader::MslFlag::VertexAsCompute;
+                        flags |= QSpirvShader::MslFlag::WithUInt32Index;
+                        break;
+                    case QShader::NonIndexedVertexAsComputeShader:
+                        flags |= QSpirvShader::MslFlag::VertexAsCompute;
+                        break;
+                    default:
+                        break;
+                    }
+                }
+                shader.setShader(currentSpirvShader->translateToMSL(req.second.version(), flags, d->stage, &nativeBindings, &shaderInfo, d->tessInfo));
                 if (shader.shader().isEmpty()) {
-                    d->errorMessage = currentSpirvShader->translationErrorMessage();
-                    return QShader();
+                    if (d->breakOnShaderTranslationError) {
+                        d->errorMessage = currentSpirvShader->translationErrorMessage();
+                        return QShader();
+                    } else {
+                        d->errorMessage += QLatin1String(" ") + currentSpirvShader->translationErrorMessage();
+                        continue;
+                    }
                 }
                 shader.setEntryPoint(QByteArrayLiteral("main0"));
                 bs.setResourceBindingMap(key, nativeBindings);
+                bs.setNativeShaderInfo(key, shaderInfo);
             }
                 break;
             default:

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
 #include "qspirvcompiler_p.h"
-#include "qshaderbatchablerewriter_p.h"
+#include "qshaderrewriter_p.h"
 #include <QFile>
 #include <QFileInfo>
 
@@ -11,6 +11,8 @@ QT_WARNING_DISABLE_GCC("-Wsuggest-override")
 #include <glslang/Public/ShaderLang.h>
 #include <SPIRV/GlslangToSpv.h>
 QT_WARNING_POP
+
+//#define TOKENIZER_DEBUG
 
 QT_BEGIN_NAMESPACE
 
@@ -374,8 +376,12 @@ void QSpirvCompiler::setSGBatchingVertexInputLocation(int location)
 
 QByteArray QSpirvCompiler::compileToSpirv()
 {
+#ifdef TOKENIZER_DEBUG
+    QShaderRewriter::debugTokenizer(d->source);
+#endif
+
     if (d->stage == EShLangVertex && d->flags.testFlag(RewriteToMakeBatchableForSG) && d->batchableSource.isEmpty())
-        d->batchableSource = QShaderBatchableRewriter::addZAdjustment(d->source, d->batchAttrLoc);
+        d->batchableSource = QShaderRewriter::addZAdjustment(d->source, d->batchAttrLoc);
 
     return d->compile() ? d->spirv : QByteArray();
 }
