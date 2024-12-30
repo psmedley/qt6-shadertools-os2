@@ -1,7 +1,7 @@
-// Copyright (C) 2021 The Qt Company Ltd.
+// Copyright (C) 2023 The Qt Company Ltd.
 // SPDX-License-Identifier: LicenseRef-Qt-Commercial OR LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only
 
-#include "qshaderbaker_p.h"
+#include "qshaderbaker.h"
 #include "qspirvcompiler_p.h"
 #include "qspirvshader_p.h"
 #include <QFileInfo>
@@ -12,11 +12,22 @@ QT_BEGIN_NAMESPACE
 
 /*!
     \class QShaderBaker
-    \internal
     \inmodule QtShaderTools
+    \since 6.6
 
     \brief Compiles a GLSL/Vulkan shader into SPIR-V, translates into other
     shading languages, and gathers reflection metadata.
+
+    \warning QShaderBaker, just like the QRhi family of classes in the Qt Gui
+    module, including QShader and QShaderDescription, offers limited
+    compatibility guarantees. There are no source or binary compatibility
+    guarantees for these classes, meaning the API is only guaranteed to work
+    with the Qt version the application was developed against. Source
+    incompatible changes are however aimed to be kept at a minimum and will only
+    be made in minor releases (6.7, 6.8, and so on). To use this class in an
+    application, link to \c{Qt::ShaderToolsPrivate} (if using CMake), and
+    include the headers with the \c rhi prefix, for example
+    \c{#include <rhi/qshaderbaker.h>}.
 
     QShaderBaker takes a graphics (vertex, fragment, etc.) or compute shader,
     and produces multiple - either source or bytecode - variants of it,
@@ -25,12 +36,12 @@ QT_BEGIN_NAMESPACE
     and deserialization.
 
     \note Applications and libraries are recommended to avoid using this class
-    directly. Rather, all Qt users are encouraged to rely on offline
-    compilation by invoking the \c qsb command-line tool at build time. This
-    tool uses QShaderBaker itself and writes the serialized version of the
-    generated QShader into a file. The usage of this class should be
-    restricted to cases where run time compilation cannot be avoided, such as
-    when working with user-provided shader source strings.
+    directly. Rather, all Qt users are encouraged to rely on offline compilation
+    by invoking the \c qsb command-line tool at build time via CMake. The \c qsb
+    tool uses QShaderBaker and writes the serialized version of the generated
+    QShader into a file. The usage of this class should be restricted to cases
+    where run time compilation cannot be avoided, such as when working with
+    user-provided or dynamically generated shader source strings.
 
     The input format is always assumed to be Vulkan-flavored GLSL at the
     moment. See the
@@ -403,9 +414,9 @@ void QShaderBaker::setBreakOnShaderTranslationError(bool enable)
 
 /*!
     When generating MSL shader code for a tessellation control shader, the
-    tessellation mode (triangles or quads) must be known upfront. In GLSL this
-    is declared in the tessellation evaluation shader typically, but for Metal
-    it must be known also when generating the compute shader from the
+    tessellation \a mode (triangles or quads) must be known upfront. In GLSL
+    this is declared in the tessellation evaluation shader typically, but for
+    Metal it must be known also when generating the compute shader from the
     tessellation control shader.
 
     When not set, the default is triangles.
@@ -417,7 +428,7 @@ void QShaderBaker::setTessellationMode(QShaderDescription::TessellationMode mode
 
 /*!
     When generating MSL shader code for a tessellation evaluation shader, the
-    output vertex count of the tessellation control shader must be known
+    output vertex \a count of the tessellation control shader must be known
     upfront. in GLSL this would be declared in the tessellation control shader
     typically, but for Metal it must be known also when generating the vertex
     shader from the teselation evaluation shader.

@@ -3,8 +3,8 @@
 
 #include "qspirvshader_p.h"
 #include "qspirvshaderremap_p.h"
-#include <QtGui/private/qshaderdescription_p_p.h>
-#include <QtGui/private/qshader_p_p.h>
+#include <private/qshaderdescription_p.h>
+#include <private/qshader_p.h>
 
 #include <spirv_cross_c.h>
 
@@ -238,6 +238,16 @@ QShaderDescription::InOutVariable QSpirvShaderPrivate::inOutVar(const spvc_refle
                              spvc_compiler_has_decoration(glslGen, r.id, SpvDecorationNonWritable));
     }
 
+    if (v.type == QShaderDescription::Struct) {
+        const unsigned count = spvc_type_get_num_member_types(baseTypeHandle);
+        const spvc_type_id id = spvc_type_get_base_type_id(baseTypeHandle);
+
+        for (unsigned idx = 0; idx < count; ++idx) {
+            v.structMembers.append(blockVar(id, idx));
+            v.perPatch |= bool(spvc_compiler_has_member_decoration(glslGen, id, idx, SpvDecorationPatch));
+        }
+    }
+
     return v;
 }
 
@@ -250,6 +260,7 @@ QShaderDescription::BlockVariable QSpirvShaderPrivate::blockVar(spvc_type_id typ
     spvc_type_id memberTypeId = spvc_type_get_member_type(t, memberIdx);
     spvc_type memberType = spvc_compiler_get_type_handle(glslGen, memberTypeId);
     v.type = varType(memberType);
+    v.offset = -1;
 
     unsigned offset = 0;
     if (spvc_compiler_type_struct_member_offset(glslGen, t, memberIdx, &offset) == SPVC_SUCCESS)
@@ -384,6 +395,15 @@ void QSpirvShaderPrivate::reflect()
             if (spvc_compiler_has_active_builtin(glslGen, builtinResourceList[i].builtin, SpvStorageClassInput)) {
                 QShaderDescription::BuiltinVariable v;
                 v.type = QShaderDescription::BuiltinType(builtinResourceList[i].builtin);
+
+                spvc_type type = spvc_compiler_get_type_handle(
+                        glslGen, builtinResourceList[i].value_type_id);
+                v.varType = varType(type);
+
+                for (unsigned i = 0, dimCount = spvc_type_get_num_array_dimensions(type);
+                     i < dimCount; ++i)
+                    v.arrayDims.append(int(spvc_type_get_array_dimension(type, i)));
+
                 dd->inBuiltins.append(v);
             }
         }
@@ -401,6 +421,15 @@ void QSpirvShaderPrivate::reflect()
             if (spvc_compiler_has_active_builtin(glslGen, builtinResourceList[i].builtin, SpvStorageClassOutput)) {
                 QShaderDescription::BuiltinVariable v;
                 v.type = QShaderDescription::BuiltinType(builtinResourceList[i].builtin);
+
+                spvc_type type = spvc_compiler_get_type_handle(
+                        glslGen, builtinResourceList[i].value_type_id);
+                v.varType = varType(type);
+
+                for (unsigned i = 0, dimCount = spvc_type_get_num_array_dimensions(type);
+                     i < dimCount; ++i)
+                    v.arrayDims.append(int(spvc_type_get_array_dimension(type, i)));
+
                 dd->outBuiltins.append(v);
             }
         }
@@ -871,6 +900,10 @@ QByteArray QSpirvShader::translateToMSL(int version,
     spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_MSL_SHADER_OUTPUT_BUFFER_INDEX, spvOutBufferIndex);
     spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_MSL_INDIRECT_PARAMS_BUFFER_INDEX, spvIndirectParamsBufferIndex);
 
+    // for buffer size buffer; matches defaults
+    uint spvBufferSizeBufferIndex = 25;
+    spvc_compiler_options_set_uint(options, SPVC_COMPILER_OPTION_MSL_BUFFER_SIZE_BUFFER_INDEX, spvBufferSizeBufferIndex);
+
     if (stage == QShader::TessellationControlStage) {
         // required to get the kind of tess.control inputs we need
         spvc_compiler_options_set_bool(options, SPVC_COMPILER_OPTION_MSL_MULTI_PATCH_WORKGROUP, 1);
@@ -987,7 +1020,7 @@ QByteArray QSpirvShader::translateToMSL(int version,
         qWarning("Translated Metal shader needs swizzle buffer, this is unexpected");
 
     if (spvc_compiler_msl_needs_buffer_size_buffer(d->mslGen))
-        qWarning("Translated Metal shader needs buffer size buffer, this is unexpected");
+        shaderInfo->extraBufferBindings[QShaderPrivate::MslBufferSizeBufferBinding] = spvBufferSizeBufferIndex;
 
     // (Aim to) only store extraBufferBindings entries for things that really
     // are present, because the presence of a key can already trigger certain
