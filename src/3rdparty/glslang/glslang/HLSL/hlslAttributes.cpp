@@ -36,7 +36,6 @@
 #include "hlslAttributes.h"
 #include "hlslParseHelper.h"
 
-using namespace QtShaderTools;
 namespace glslang {
     // Map the given string to an attribute enum from TAttributeType,
     // or EatNone if invalid.
@@ -102,6 +101,8 @@ namespace glslang {
 
             if (name == "nonwritable")    return EatNonWritable;
             if (name == "nonreadable")    return EatNonReadable;
+
+            if (name == "export")         return EatExport;
         } else if (nameSpace.size() > 0)
             return EatNone;
 

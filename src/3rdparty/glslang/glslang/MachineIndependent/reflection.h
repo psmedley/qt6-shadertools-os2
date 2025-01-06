@@ -33,8 +33,6 @@
 // POSSIBILITY OF SUCH DAMAGE.
 //
 
-#if !defined(GLSLANG_WEB) && !defined(GLSLANG_ANGLE)
-
 #ifndef _REFLECTION_INCLUDED
 #define _REFLECTION_INCLUDED
 
@@ -221,5 +219,3 @@ protected:
 } // namespace QtShaderTools
 
 #endif // _REFLECTION_INCLUDED
-
-#endif // !GLSLANG_WEB && !GLSLANG_ANGLE

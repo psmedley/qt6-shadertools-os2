@@ -98,6 +98,8 @@ typedef enum SpvExecutionModel_ {
     SpvExecutionModelMissNV = 5317,
     SpvExecutionModelCallableKHR = 5318,
     SpvExecutionModelCallableNV = 5318,
+    SpvExecutionModelTaskEXT = 5364,
+    SpvExecutionModelMeshEXT = 5365,
     SpvExecutionModelMax = 0x7fffffff,
 } SpvExecutionModel;
 
@@ -165,11 +167,21 @@ typedef enum SpvExecutionMode_ {
     SpvExecutionModeSignedZeroInfNanPreserve = 4461,
     SpvExecutionModeRoundingModeRTE = 4462,
     SpvExecutionModeRoundingModeRTZ = 4463,
+    SpvExecutionModeEarlyAndLateFragmentTestsAMD = 5017,
     SpvExecutionModeStencilRefReplacingEXT = 5027,
+    SpvExecutionModeStencilRefUnchangedFrontAMD = 5079,
+    SpvExecutionModeStencilRefGreaterFrontAMD = 5080,
+    SpvExecutionModeStencilRefLessFrontAMD = 5081,
+    SpvExecutionModeStencilRefUnchangedBackAMD = 5082,
+    SpvExecutionModeStencilRefGreaterBackAMD = 5083,
+    SpvExecutionModeStencilRefLessBackAMD = 5084,
+    SpvExecutionModeOutputLinesEXT = 5269,
     SpvExecutionModeOutputLinesNV = 5269,
+    SpvExecutionModeOutputPrimitivesEXT = 5270,
     SpvExecutionModeOutputPrimitivesNV = 5270,
     SpvExecutionModeDerivativeGroupQuadsNV = 5289,
     SpvExecutionModeDerivativeGroupLinearNV = 5290,
+    SpvExecutionModeOutputTrianglesEXT = 5298,
     SpvExecutionModeOutputTrianglesNV = 5298,
     SpvExecutionModePixelInterlockOrderedEXT = 5366,
     SpvExecutionModePixelInterlockUnorderedEXT = 5367,
@@ -219,6 +231,7 @@ typedef enum SpvStorageClass_ {
     SpvStorageClassShaderRecordBufferNV = 5343,
     SpvStorageClassPhysicalStorageBuffer = 5349,
     SpvStorageClassPhysicalStorageBufferEXT = 5349,
+    SpvStorageClassTaskPayloadWorkgroupEXT = 5402,
     SpvStorageClassCodeSectionINTEL = 5605,
     SpvStorageClassDeviceOnlyINTEL = 5936,
     SpvStorageClassHostOnlyINTEL = 5937,
@@ -496,11 +509,14 @@ typedef enum SpvDecoration_ {
     SpvDecorationMaxByteOffsetId = 47,
     SpvDecorationNoSignedWrap = 4469,
     SpvDecorationNoUnsignedWrap = 4470,
+    SpvDecorationWeightTextureQCOM = 4487,
+    SpvDecorationBlockMatchTextureQCOM = 4488,
     SpvDecorationExplicitInterpAMD = 4999,
     SpvDecorationOverrideCoverageNV = 5248,
     SpvDecorationPassthroughNV = 5250,
     SpvDecorationViewportRelativeNV = 5252,
     SpvDecorationSecondaryViewportRelativeNV = 5256,
+    SpvDecorationPerPrimitiveEXT = 5271,
     SpvDecorationPerPrimitiveNV = 5271,
     SpvDecorationPerViewNV = 5272,
     SpvDecorationPerTaskNV = 5273,
@@ -650,6 +666,10 @@ typedef enum SpvBuiltIn_ {
     SpvBuiltInFragmentSizeNV = 5292,
     SpvBuiltInFragInvocationCountEXT = 5293,
     SpvBuiltInInvocationsPerPixelNV = 5293,
+    SpvBuiltInPrimitivePointIndicesEXT = 5294,
+    SpvBuiltInPrimitiveLineIndicesEXT = 5295,
+    SpvBuiltInPrimitiveTriangleIndicesEXT = 5296,
+    SpvBuiltInCullPrimitiveEXT = 5299,
     SpvBuiltInLaunchIdKHR = 5319,
     SpvBuiltInLaunchIdNV = 5319,
     SpvBuiltInLaunchSizeKHR = 5320,
@@ -973,6 +993,9 @@ typedef enum SpvCapability_ {
     SpvCapabilityRayQueryKHR = 4472,
     SpvCapabilityRayTraversalPrimitiveCullingKHR = 4478,
     SpvCapabilityRayTracingKHR = 4479,
+    SpvCapabilityTextureSampleWeightedQCOM = 4484,
+    SpvCapabilityTextureBoxFilterQCOM = 4485,
+    SpvCapabilityTextureBlockMatchQCOM = 4486,
     SpvCapabilityFloat16ImageAMD = 5008,
     SpvCapabilityImageGatherBiasLodAMD = 5009,
     SpvCapabilityFragmentMaskAMD = 5010,
@@ -990,6 +1013,7 @@ typedef enum SpvCapability_ {
     SpvCapabilityFragmentFullyCoveredEXT = 5265,
     SpvCapabilityMeshShadingNV = 5266,
     SpvCapabilityImageFootprintNV = 5282,
+    SpvCapabilityMeshShadingEXT = 5283,
     SpvCapabilityFragmentBarycentricKHR = 5284,
     SpvCapabilityFragmentBarycentricNV = 5284,
     SpvCapabilityComputeDerivativeGroupQuadsNV = 5288,
@@ -1577,6 +1601,10 @@ typedef enum SpvOp_ {
     SpvOpRayQueryConfirmIntersectionKHR = 4476,
     SpvOpRayQueryProceedKHR = 4477,
     SpvOpRayQueryGetIntersectionTypeKHR = 4479,
+    SpvOpImageSampleWeightedQCOM = 4480,
+    SpvOpImageBoxFilterQCOM = 4481,
+    SpvOpImageBlockMatchSSDQCOM = 4482,
+    SpvOpImageBlockMatchSADQCOM = 4483,
     SpvOpGroupIAddNonUniformAMD = 5000,
     SpvOpGroupFAddNonUniformAMD = 5001,
     SpvOpGroupFMinNonUniformAMD = 5002,
@@ -1589,6 +1617,8 @@ typedef enum SpvOp_ {
     SpvOpFragmentFetchAMD = 5012,
     SpvOpReadClockKHR = 5056,
     SpvOpImageSampleFootprintNV = 5283,
+    SpvOpEmitMeshTasksEXT = 5294,
+    SpvOpSetMeshOutputsEXT = 5295,
     SpvOpGroupNonUniformPartitionNV = 5296,
     SpvOpWritePackedPrimitiveIndices4x8NV = 5299,
     SpvOpReportIntersectionKHR = 5334,
@@ -2250,6 +2280,10 @@ inline void SpvHasResultAndType(SpvOp opcode, bool *hasResult, bool *hasResultTy
     case SpvOpRayQueryConfirmIntersectionKHR: *hasResult = false; *hasResultType = false; break;
     case SpvOpRayQueryProceedKHR: *hasResult = true; *hasResultType = true; break;
     case SpvOpRayQueryGetIntersectionTypeKHR: *hasResult = true; *hasResultType = true; break;
+    case SpvOpImageSampleWeightedQCOM: *hasResult = true; *hasResultType = true; break;
+    case SpvOpImageBoxFilterQCOM: *hasResult = true; *hasResultType = true; break;
+    case SpvOpImageBlockMatchSSDQCOM: *hasResult = true; *hasResultType = true; break;
+    case SpvOpImageBlockMatchSADQCOM: *hasResult = true; *hasResultType = true; break;
     case SpvOpGroupIAddNonUniformAMD: *hasResult = true; *hasResultType = true; break;
     case SpvOpGroupFAddNonUniformAMD: *hasResult = true; *hasResultType = true; break;
     case SpvOpGroupFMinNonUniformAMD: *hasResult = true; *hasResultType = true; break;
@@ -2262,6 +2296,8 @@ inline void SpvHasResultAndType(SpvOp opcode, bool *hasResult, bool *hasResultTy
     case SpvOpFragmentFetchAMD: *hasResult = true; *hasResultType = true; break;
     case SpvOpReadClockKHR: *hasResult = true; *hasResultType = true; break;
     case SpvOpImageSampleFootprintNV: *hasResult = true; *hasResultType = true; break;
+    case SpvOpEmitMeshTasksEXT: *hasResult = false; *hasResultType = false; break;
+    case SpvOpSetMeshOutputsEXT: *hasResult = false; *hasResultType = false; break;
     case SpvOpGroupNonUniformPartitionNV: *hasResult = true; *hasResultType = true; break;
     case SpvOpWritePackedPrimitiveIndices4x8NV: *hasResult = false; *hasResultType = false; break;
     case SpvOpReportIntersectionNV: *hasResult = true; *hasResultType = true; break;

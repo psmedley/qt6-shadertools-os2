@@ -1,6 +1,12 @@
 # Copyright (C) 2022 The Qt Company Ltd.
 # SPDX-License-Identifier: BSD-3-Clause
 
+if(NOT QT_BUILD_STANDALONE_TESTS AND NOT QT_BUILDING_QT)
+    cmake_minimum_required(VERSION 3.16)
+    project(tst_buildtimeqsb LANGUAGES CXX)
+    find_package(Qt6BuildInternals REQUIRED COMPONENTS STANDALONE_TEST)
+endif()
+
 qt_internal_add_test(tst_buildtimeqsb
     SOURCES
         tst_buildtimeqsb.cpp
@@ -136,4 +142,35 @@ qt6_add_shaders(tst_buildtimeqsb "shaders_tessellation_part2"
     FILES
         "tess.tesc@hlsl,50,tess_hull.hlsl"
         "tess.tese@hlsl,50,tess_domain.hlsl"
+)
+
+qt6_add_shaders(tst_buildtimeqsb "shaders_multiview"
+    PREFIX
+        "/test"
+    GLSL
+        "330,300es"
+    HLSL
+        61
+    MSL
+        12
+    VIEW_COUNT
+        2
+    FILES
+        "color_multiview.vert"
+        "color.frag"
+    OUTPUTS
+        "color_multiview.vert.qsb"
+        "color_multiview.frag.qsb"
+)
+
+qt6_add_shaders(tst_buildtimeqsb "shaders_multiview_auto"
+    PREFIX
+        "/test"
+    MULTIVIEW
+    FILES
+        "color_multiview_def.vert"
+        "color.frag"
+    OUTPUTS
+        "color_multiview_def.vert.qsb"
+        "color_multiview_def.frag.qsb"
 )

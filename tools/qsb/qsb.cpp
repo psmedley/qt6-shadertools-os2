@@ -6,6 +6,7 @@
 #include <QtCore/qtextstream.h>
 #include <QtCore/qfile.h>
 #include <QtCore/qdir.h>
+#include <QtCore/qset.h>
 #include <QtCore/qtemporarydir.h>
 #include <QtCore/qdebug.h>
 #include <QtCore/qlibraryinfo.h>
@@ -23,6 +24,8 @@
 // fatal ones should be unconditional; warnings from external tool
 // invocations must be guarded with !silent.
 static bool silent = false;
+
+using namespace Qt::StringLiterals;
 
 enum class FileType
 {
@@ -243,7 +246,8 @@ static void dump(const QShader &bs)
                     { QShaderPrivate::MslTessTescPatchOutputBufferBinding, "tessellation(tesc)-patch-output-buffer-binding" },
                     { QShaderPrivate::MslTessTescParamsBufferBinding, "tessellation(tesc)-params-buffer-binding" },
                     { QShaderPrivate::MslTessTescInputBufferBinding, "tessellation(tesc)-input-buffer-binding" },
-                    { QShaderPrivate::MslBufferSizeBufferBinding, "buffer-size-buffer-binding" }
+                    { QShaderPrivate::MslBufferSizeBufferBinding, "buffer-size-buffer-binding" },
+                    { QShaderPrivate::MslMultiViewMaskBufferBinding, "view-mask-buffer-binding" }
                 };
                 bool known = false;
                 for (size_t i = 0; i < sizeof(ebbNames) / sizeof(ebbNames[0]); ++i) {
@@ -459,6 +463,91 @@ static void replaceShaderContents(QShader *shaderPack,
     }
 }
 
+static bool generateDepfile(QFile &depfile, const QString &inputFilename,
+                            const QString &outputFilename)
+{
+    constexpr QByteArrayView includeKeyword("include");
+    // Assume that the minimalistic include statment should look as following: #include "x"
+    constexpr qsizetype minIncludeStatementSize = includeKeyword.size() + 5;
+
+    QFile inputFile(inputFilename);
+    if (!inputFile.open(QFile::ReadOnly)) {
+        printError("Unable to open input file: '%s'", qPrintable(inputFilename));
+        return false;
+    }
+    depfile.write(outputFilename.toUtf8());
+    depfile.write(": \\\n  "_ba);
+    depfile.write(inputFilename.toUtf8());
+    enum { ParseHash, ParseInclude, ParseFilename } parserState = ParseHash;
+
+    QSet<QString> knownDeps;
+    QByteArray outputBuffer;
+    while (!inputFile.atEnd()) {
+        QByteArray line = inputFile.readLine();
+        if (line.size() < minIncludeStatementSize)
+            continue;
+
+        parserState = ParseHash;
+        for (auto it = line.constBegin(); it < line.constEnd(); ++it) {
+            const auto c = *it;
+            if (c == '\t' || c == ' ')
+                continue;
+
+            if (parserState == ParseHash) {
+                // Looking for #
+                if (c == '#')
+                    parserState = ParseInclude;
+                else
+                    break;
+            } else if (parserState == ParseInclude) {
+                // Looking for 'include'
+                if (includeKeyword == QByteArrayView(it, includeKeyword.size()))
+                    parserState = ParseFilename;
+                else
+                    break;
+                it += includeKeyword.size();
+            } else if (parserState == ParseFilename) {
+                // Looking for wrapping quotes
+                QString includeString = QString::fromUtf8(QByteArrayView(it, line.constEnd()));
+                QChar quoteCounterpart;
+                if (includeString.front() == '<') {
+                    quoteCounterpart = '>';
+                } else if (includeString.front() == '"') {
+                    quoteCounterpart = '"';
+                } else {
+                    qWarning("Unrecognised include statement: '%s'", qPrintable(includeString));
+                    break;
+                }
+
+                const auto filenameBegin = 1;
+                const auto filenameEnd = includeString.indexOf(quoteCounterpart, filenameBegin);
+                if (filenameEnd > filenameBegin) {
+                    QString filename =
+                            includeString.sliced(filenameBegin, filenameEnd - filenameBegin);
+                    QFileInfo info(QFileInfo(inputFilename).absolutePath() + '/' + filename);
+
+                    if (info.exists()) {
+                        QString filePath = info.absoluteFilePath();
+                        if (!knownDeps.contains(filePath)) {
+                            outputBuffer.append(" \\\n  "_ba + filePath.toUtf8());
+                            knownDeps.insert(filePath);
+                        }
+                    } else {
+                        qWarning("File '%s' included in '%s' doesn't exist. Skip adding "
+                                 "dependency.",
+                                 qPrintable(filename), qPrintable(inputFilename));
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    if (!outputBuffer.isEmpty())
+        depfile.write(outputBuffer);
+    return true;
+}
+
 int main(int argc, char **argv)
 {
     QCoreApplication app(argc, argv);
@@ -511,6 +600,12 @@ int main(int argc, char **argv)
                                                                "If it does not match the tess.evaluation stage, the generated MSL code will not function as expected."),
                                       QObject::tr("mode"));
     cmdLineParser.addOption(tessModeOption);
+    QCommandLineOption multiViewCountOption("view-count", QObject::tr("The number of views the shader is used with. num_views must be >= 2. "
+                                                                      "Mandatory when multiview rendering is used (gl_ViewIndex). "
+                                                                      "Set only for vertex shaders that really do rely on multiview (as the resulting asset is tied to num_views). "
+                                                                      "Can be set for fragment shaders too, to get QSHADER_VIEW_COUNT auto-defined. (useful for ensuring uniform buffer layouts)"),
+                                            QObject::tr("num_views"));
+    cmdLineParser.addOption(multiViewCountOption);
     QCommandLineOption debugInfoOption("g", QObject::tr("Generate full debug info for SPIR-V and DXBC"));
     cmdLineParser.addOption(debugInfoOption);
     QCommandLineOption spirvOptOption("O", QObject::tr("Invoke spirv-opt (external tool) to optimize SPIR-V for performance."));
@@ -524,7 +619,7 @@ int main(int argc, char **argv)
                                                  "use only to bake compatibility versions. F.ex. 64 is Qt 6.4."),
                                      QObject::tr("version"));
     cmdLineParser.addOption(qsbVersionOption);
-    QCommandLineOption fxcOption({ "c", "fxc" }, QObject::tr("In combination with --hlsl invokes fxc to store DXBC instead of HLSL."));
+    QCommandLineOption fxcOption({ "c", "fxc" }, QObject::tr("In combination with --hlsl invokes fxc (SM 5.0/5.1) or dxc (SM 6.0+) to store DXBC or DXIL instead of HLSL."));
     cmdLineParser.addOption(fxcOption);
     QCommandLineOption mtllibOption({ "t", "metallib" },
                                     QObject::tr("In combination with --msl builds a Metal library with xcrun metal(lib) and stores that instead of the source. "
@@ -564,6 +659,12 @@ int main(int argc, char **argv)
     QCommandLineOption silentOption({ "s", "silent" }, QObject::tr("Enables silent mode. Only fatal errors will be printed."));
     cmdLineParser.addOption(silentOption);
 
+    QCommandLineOption depfileOption("depfile",
+                                     QObject::tr("Enables generating the depfile for the input "
+                                                 "shaders, using the #include statements."),
+                                     QObject::tr("depfile"));
+    cmdLineParser.addOption(depfileOption);
+
     cmdLineParser.process(app);
 
     if (cmdLineParser.positionalArguments().isEmpty()) {
@@ -574,6 +675,19 @@ int main(int argc, char **argv)
     silent = cmdLineParser.isSet(silentOption);
 
     QShaderBaker baker;
+
+    QFile depfile;
+    if (const QString depfilePath = cmdLineParser.value(depfileOption); !depfilePath.isEmpty()) {
+        QDir().mkpath(QFileInfo(depfilePath).path());
+        depfile.setFileName(depfilePath);
+        if (!depfile.open(QFile::WriteOnly | QFile::Truncate)) {
+            printError("Unable to create DEPFILE: '%s'", qPrintable(depfilePath));
+            return 1;
+        }
+    }
+
+    const bool depfileRequired = depfile.isOpen();
+
     for (const QString &fn : cmdLineParser.positionalArguments()) {
         auto qsbVersion = QShader::SerializedFormatVersion::Latest;
         if (cmdLineParser.isSet(qsbVersionOption)) {
@@ -588,6 +702,7 @@ int main(int argc, char **argv)
                 return 1;
             }
         }
+
         if (cmdLineParser.isSet(dumpOption)
                 || cmdLineParser.isSet(extractOption)
                 || cmdLineParser.isSet(replaceOption)
@@ -621,6 +736,9 @@ int main(int argc, char **argv)
             }
             continue;
         }
+
+        if (depfileRequired && !generateDepfile(depfile, fn, cmdLineParser.value(outputOption)))
+            return 1;
 
         baker.setSourceFileName(fn);
 
@@ -661,6 +779,9 @@ int main(int argc, char **argv)
 
         if (cmdLineParser.isSet(tessVertCountOption))
             baker.setTessellationOutputVertexCount(cmdLineParser.value(tessVertCountOption).toInt());
+
+        if (cmdLineParser.isSet(multiViewCountOption))
+            baker.setMultiViewCount(cmdLineParser.value(multiViewCountOption).toInt());
 
         baker.setGeneratedShaderVariants(variants);
 
@@ -796,8 +917,8 @@ int main(int argc, char **argv)
             }
         }
 
-        // post processing: run fxc when requested for each entry with type
-        // HlslShader and add a new entry with type DxbcShader and remove the
+        // post processing: run fxc/dxc when requested for each entry with type
+        // HlslShader and add a new entry with type DxbcShader/DxilShader and remove the
         // original HlslShader entry
         if (cmdLineParser.isSet(fxcOption)) {
             QTemporaryDir tempDir;
@@ -808,6 +929,8 @@ int main(int argc, char **argv)
             auto skeys = bs.availableShaders();
             for (QShaderKey &k : skeys) {
                 if (k.source() == QShader::HlslShader) {
+                    // For Shader Model 6.0 and higher, use dxc, fxc will not compile that anymore.
+                    const bool useDxc = k.sourceVersion().version() >= 60;
                     QShaderCode s = bs.shader(k);
 
                     const QString tmpIn = writeTemp(tempDir, QLatin1String("qsb_hlsl_temp"), s, FileType::Text);
@@ -827,11 +950,14 @@ int main(int argc, char **argv)
                     arguments.append(QDir::toNativeSeparators(tmpIn));
                     QByteArray output;
                     QByteArray errorOutput;
-                    bool success = runProcess(QLatin1String("fxc"), arguments, &output, &errorOutput);
+                    const QString compilerName = useDxc ? QLatin1String("dxc") : QLatin1String("fxc");
+                    bool success = runProcess(compilerName, arguments, &output, &errorOutput);
                     if (success) {
                         const QByteArray bytecode = readFile(tmpOut, FileType::Binary);
-                        if (!bytecode.isEmpty())
-                            replaceShaderContents(&bs, k, QShader::DxbcShader, bytecode, s.entryPoint());
+                        if (!bytecode.isEmpty()) {
+                            const QShader::Source bytecodeType = useDxc ? QShader::DxilShader : QShader::DxbcShader;
+                            replaceShaderContents(&bs, k, bytecodeType, bytecode, s.entryPoint());
+                        }
                     } else {
                         if ((!output.isEmpty() || !errorOutput.isEmpty()) && !silent) {
                             printError("%s\n%s",
