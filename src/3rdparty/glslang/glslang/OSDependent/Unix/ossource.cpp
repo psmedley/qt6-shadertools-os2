@@ -39,7 +39,7 @@
 
 #include <cstdio>
 
-#if !defined(__Fuchsia__) && !defined(__ghs__)
+#if !defined(__Fuchsia__) && !defined(__ghs__) && !defined(__OS2__)
 #include <sys/resource.h>
 #endif
 
